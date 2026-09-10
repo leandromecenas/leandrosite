@@ -1,4 +1,4 @@
-name: Fix link-in-bio destinations
+name: Apply link-in-bio destinations
 
 on:
   push:
@@ -9,116 +9,52 @@ permissions:
   contents: write
 
 jobs:
-  fix-links:
+  update:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Update CTA and Instagram links
-        shell: bash
+      - name: Update destinations
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          import html
-          import re
-          import unicodedata
 
           path = Path('link-na-bio.html')
-          source = path.read_text(encoding='utf-8')
+          text = path.read_text(encoding='utf-8')
 
-          def normalize(value: str) -> str:
-              value = re.sub(r'<[^>]+>', ' ', value)
-              value = html.unescape(value)
-              value = unicodedata.normalize('NFKD', value)
-              value = ''.join(ch for ch in value if not unicodedata.combining(ch))
-              return re.sub(r'\s+', ' ', value).strip().lower()
+          changes = [
+              (
+                  'href=\\\"https://nivvo.online/f/linkbio\\\" target=\\\"_blank\\\" rel=\\\"noopener\\\"',
+                  'href=\\\"https://nivvo.online/f/linkbio\\\"',
+                  'FLUXO CTA'
+              ),
+              (
+                  'href=\\\"https://www.instagram.com\\\" target=\\\"_blank\\\" rel=\\\"noopener\\\"',
+                  'href=\\\"https://www.instagram.com/leandromecenas/\\\"',
+                  'Instagram'
+              ),
+          ]
 
-          anchor_re = re.compile(r'<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>', re.I | re.S)
-          anchors = list(anchor_re.finditer(source))
+          for old, new, label in changes:
+              count = text.count(old)
+              print(f'{label}: {count} exact match(es)')
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, found {count}; nothing written.')
 
-          manager = []
-          instagram = []
-          for match in anchors:
-              attrs = match.group('attrs')
-              body = match.group('body')
-              visible = normalize(body)
-              attrs_norm = normalize(attrs)
-              href_match = re.search(r'\bhref\s*=\s*(["\'])(.*?)\1', attrs, re.I | re.S)
-              href = href_match.group(2).strip() if href_match else ''
-              href_lower = href.lower()
+          for old, new, label in changes:
+              text = text.replace(old, new, 1)
 
-              if 'gestor' in visible and 'trafego' in visible:
-                  manager.append(match)
-
-              if (
-                  'instagram.com' in href_lower
-                  or href_lower.startswith('instagram:')
-                  or 'instagram' in attrs_norm
-                  or 'instagram' in visible
-              ):
-                  instagram.append(match)
-
-          print(f'CTA gestor candidates: {len(manager)}')
-          print(f'Instagram candidates: {len(instagram)}')
-          for label, matches in [('CTA', manager), ('Instagram', instagram)]:
-              for idx, match in enumerate(matches, 1):
-                  snippet = re.sub(r'\s+', ' ', match.group(0))[:500]
-                  print(f'{label} {idx}: {snippet}')
-
-          if len(manager) != 1:
-              raise SystemExit(f'Expected exactly 1 gestor CTA, found {len(manager)}. No file was changed.')
-          if len(instagram) != 1:
-              raise SystemExit(f'Expected exactly 1 Instagram link, found {len(instagram)}. No file was changed.')
-
-          replacements = {
-              manager[0].start(): 'https://nivvo.online/f/linkbio',
-              instagram[0].start(): 'https://www.instagram.com/leandromecenas/',
-          }
-
-          def rewrite(match):
-              attrs = match.group('attrs')
-              body = match.group('body')
-              url = replacements.get(match.start())
-              if not url:
-                  return match.group(0)
-
-              # Ensure navigation stays in the same tab / Instagram in-app browser.
-              attrs = re.sub(r'\s+target\s*=\s*(["\']).*?\1', '', attrs, flags=re.I | re.S)
-              attrs = re.sub(r'\s+target\s*=\s*[^\s>]+', '', attrs, flags=re.I)
-
-              href_quoted = re.compile(r'\bhref\s*=\s*(["\'])(.*?)\1', re.I | re.S)
-              href_unquoted = re.compile(r'\bhref\s*=\s*[^\s>]+', re.I)
-              if href_quoted.search(attrs):
-                  attrs = href_quoted.sub(lambda m: f'href={m.group(1)}{url}{m.group(1)}', attrs, count=1)
-              elif href_unquoted.search(attrs):
-                  attrs = href_unquoted.sub(f'href="{url}"', attrs, count=1)
-              else:
-                  attrs = f' href="{url}"' + attrs
-
-              # A window.open handler would defeat same-tab navigation. Remove only
-              # onclick handlers that explicitly open another window; preserve analytics handlers.
-              attrs = re.sub(
-                  r'\s+onclick\s*=\s*(["\'])(?:(?!\1).)*?window\.open(?:(?!\1).)*?\1',
-                  '', attrs, flags=re.I | re.S
-              )
-              return f'<a{attrs}>{body}</a>'
-
-          updated = anchor_re.sub(rewrite, source)
-          if updated == source:
-              raise SystemExit('No changes produced; refusing to commit.')
-
-          path.write_text(updated, encoding='utf-8')
-          print('Links updated successfully.')
+          path.write_text(text, encoding='utf-8')
+          print('Both destinations updated; no target=_blank remains on these two links.')
           PY
 
-      - name: Commit link changes
-        shell: bash
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add link-na-bio.html
           git diff --cached --quiet && exit 0
-          git commit -m "Update link-in-bio destinations"
+          git commit -m "Fix CTA and Instagram navigation"
           git push origin HEAD:main
