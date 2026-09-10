@@ -1,0 +1,157 @@
+name: Patch site links and Fluxo glow
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-site-links.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch link-na-bio.html
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('link-na-bio.html')
+          html = path.read_text(encoding='utf-8')
+          marker = '<!-- leo-site-behavior-v1 -->'
+
+          if marker not in html:
+              injection = r'''
+          <!-- leo-site-behavior-v1 -->
+          <style id="leo-site-overrides-v1">
+            .leo-fluxo-arrow-soft {
+              box-shadow: 0 4px 10px rgba(0,0,0,.18) !important;
+              filter: none !important;
+            }
+            .leo-fluxo-arrow-soft::before,
+            .leo-fluxo-arrow-soft::after {
+              box-shadow: none !important;
+              filter: none !important;
+            }
+          </style>
+          <script id="leo-site-behavior-v1">
+          (() => {
+            const TRAFEGO_URL = 'https://nivvo.online/f/linkbio';
+            const INSTAGRAM_URL = 'https://www.instagram.com/leandromecenas/';
+            const norm = (value) => (value || '')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .trim();
+
+            const sameTab = (el, url) => {
+              if (!el || el.dataset.leoSameTab === url) return;
+              el.dataset.leoSameTab = url;
+              if (el.tagName === 'A') {
+                el.setAttribute('href', url);
+                el.removeAttribute('target');
+                el.removeAttribute('rel');
+              }
+              el.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                window.location.assign(url);
+              }, true);
+            };
+
+            const apply = () => {
+              // Fluxo / gestão de tráfego: sempre abre no mesmo navegador/aba.
+              const clickable = [...document.querySelectorAll('a, button, [role="button"]')];
+              clickable.forEach((el) => {
+                const text = norm(el.textContent);
+                if (
+                  text.includes('quero vender mais imoveis') ||
+                  text.includes('quero mais leads de imovel todo mes') ||
+                  text.includes('contratar gestor de trafego')
+                ) {
+                  sameTab(el, TRAFEGO_URL);
+                }
+              });
+
+              // Fallback caso a frase esteja em um filho de um elemento clicável.
+              const trafficText = [...document.querySelectorAll('body *')].find((el) =>
+                norm(el.textContent) === 'quero vender mais imoveis'
+              );
+              if (trafficText) {
+                const parentClickable = trafficText.closest('a, button, [role="button"]');
+                if (parentClickable) sameTab(parentClickable, TRAFEGO_URL);
+              }
+
+              // Instagram correto, sem target=_blank.
+              document.querySelectorAll('a[href*="instagram.com"], a[href*="instagram://"]').forEach((a) => {
+                sameTab(a, INSTAGRAM_URL);
+              });
+
+              // Reduz o glow do botão circular com seta no card da Fluxo.
+              const cardCandidates = [...document.querySelectorAll('body *')]
+                .filter((el) => {
+                  const text = norm(el.textContent);
+                  return text.includes('quero mais leads de imovel todo mes') &&
+                         text.includes('quero vender mais imoveis');
+                })
+                .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
+
+              const card = cardCandidates[0];
+              if (card) {
+                const cardRect = card.getBoundingClientRect();
+                const roundCandidates = [...card.querySelectorAll('div, span, a, button')]
+                  .filter((el) => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 38 || r.width > 100 || r.height < 38 || r.height > 100) return false;
+                    if (Math.abs(r.width - r.height) > 14) return false;
+                    if (r.left < cardRect.left + cardRect.width * 0.55) return false;
+                    if (r.top > cardRect.top + cardRect.height * 0.50) return false;
+                    const cs = getComputedStyle(el);
+                    const radius = parseFloat(cs.borderTopLeftRadius) || 0;
+                    const looksRound = radius >= Math.min(r.width, r.height) * 0.30 || cs.borderRadius.includes('%');
+                    const hasArrow = !!el.querySelector('svg') || /[→›>]/.test(el.textContent || '');
+                    return looksRound && hasArrow;
+                  })
+                  .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left);
+
+                if (roundCandidates[0]) {
+                  roundCandidates[0].classList.add('leo-fluxo-arrow-soft');
+                }
+              }
+            };
+
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', apply, { once: true });
+            } else {
+              apply();
+            }
+            setTimeout(apply, 250);
+            setTimeout(apply, 1200);
+          })();
+          </script>
+          '''
+
+              lower = html.lower()
+              closing = lower.rfind('</body>')
+              if closing >= 0:
+                  html = html[:closing] + injection + html[closing:]
+              else:
+                  html += injection
+              path.write_text(html, encoding='utf-8')
+
+      - name: Commit patched site
+        run: |
+          if git diff --quiet -- link-na-bio.html; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add link-na-bio.html
+          git commit -m "Update traffic and Instagram links; soften Fluxo arrow glow"
+          git push
