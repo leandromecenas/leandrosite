@@ -76,3 +76,5 @@ jobs:
           git add link-na-bio.html
           git commit -m "Set gestor de tráfego contact link"
           git push
+
+# trigger
