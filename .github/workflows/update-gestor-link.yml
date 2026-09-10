@@ -1,0 +1,78 @@
+name: Update gestor link
+
+on:
+  push:
+    paths:
+      - '.github/workflows/update-gestor-link.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update-link:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update gestor de tráfego link
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, html, unicodedata
+
+          path = Path('link-na-bio.html')
+          text = path.read_text(encoding='utf-8')
+          target = 'https://nivvo.online/f/linkbio'
+
+          def norm(s):
+              s = html.unescape(re.sub(r'<[^>]+>', ' ', s))
+              s = unicodedata.normalize('NFD', s)
+              s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
+              return re.sub(r'\s+', ' ', s).strip().lower()
+
+          matches = []
+          pattern = re.compile(r'(?is)<a\b[^>]*>.*?</a>')
+          for m in pattern.finditer(text):
+              label = norm(m.group(0))
+              if 'gestor' in label and 'trafego' in label:
+                  matches.append(m)
+
+          if not matches:
+              raise SystemExit('Nenhum link <a> contendo gestor + trafego foi encontrado.')
+
+          if len(matches) > 1:
+              print(f'Encontrados {len(matches)} links; será alterado apenas o primeiro compatível.')
+
+          m = matches[0]
+          anchor = m.group(0)
+          print('Texto do link encontrado:', norm(anchor)[:300])
+
+          if re.search(r'(?i)\bhref\s*=', anchor):
+              updated = re.sub(
+                  r'(?i)\bhref\s*=\s*(["\']).*?\1',
+                  lambda x: f'href={x.group(1)}{target}{x.group(1)}',
+                  anchor,
+                  count=1,
+              )
+          else:
+              updated = re.sub(r'(?i)^<a\b', f'<a href="{target}"', anchor, count=1)
+
+          if updated == anchor:
+              raise SystemExit('O link foi localizado, mas o href não pôde ser alterado.')
+
+          text = text[:m.start()] + updated + text[m.end():]
+          path.write_text(text, encoding='utf-8')
+          print('Destino configurado:', target)
+          PY
+
+      - name: Commit change
+        run: |
+          if git diff --quiet -- link-na-bio.html; then
+            echo "Nenhuma alteração necessária."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add link-na-bio.html
+          git commit -m "Set gestor de tráfego contact link"
+          git push
